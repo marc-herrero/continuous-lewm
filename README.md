@@ -60,10 +60,12 @@ $$\dot z = f_\theta(z, a), \qquad z_{t+1} = z_t + \int_0^1 f_\theta\big(z(\tau),
 
 The usual arguments for doing so are better accuracy, smoother long-horizon rollouts, arbitrary-time queries, and access to continuous-time optimal control. We test which of these hold when everything else — encoder, data, history, training recipe, planner — is held fixed.
 
+<!-- TODO: Trajectory vector field streamlines visualization
 <p align="center">
   <img src="assets/figures/vector_field_pca.png" width="640" alt="Streamlines of the learned vector field in a 2D PCA projection of the latent space, for several fixed actions">
-  <br><em>The learned predictor as a vector field: streamlines of f(z, a) in a 2D PCA projection of the latent space, for several fixed actions (projection for illustration only).</em>
+  <br><em>The learned predictor as a vector field: streamlines of f(z, a) in a 2D PCA projection of the latent space, for several fixed actions.</em>
 </p>
+-->
 
 ---
 
@@ -101,9 +103,11 @@ The encoder is LeWM's own (frozen), so only the predictor differs.
 
 - **Solver independence:** Planning success is flat from $N=1$ to $N=16$ Euler steps per block (88.5–90.0%, $n=200$), with RK2 and RK4 giving the same. Inside a block the velocity rotates by about 16° and slows by about 13%, but the path stays 99.5% straight (arc/chord = 1.005) — so one Euler step already captures the trajectory.
 
+<!-- TODO: Solver step overlay visualization
 <p align="center">
   <img src="assets/figures/euler_steps_overlay.png" width="560" alt="One block integrated with N = 1, 2, 4 and 16 Euler steps; the endpoints coincide">
 </p>
+-->
 
 ---
 
@@ -175,9 +179,11 @@ Planning uses augmented-Lagrangian direct collocation; $\sigma = 0.4$ is about 2
 - **Geometric, not exploratory:** Smoothing the state alone gives 64.0% with a small CEM warm start; adding action noise gives 64.5% ($p = 1.0$). The gain comes from smoothing the landscape, not from extra exploration.
 - This adapts randomized smoothing through contact ([Suh, Pang & Tedrake](https://arxiv.org/abs/2109.05143)) to learned latent dynamics, demonstrating that the roughness it removes survives the encoder.
 
+<!-- TODO: GNC 2D planning cost animation
 <p align="center">
   <img src="assets/figures/gnc_landscape.gif" width="560" alt="2D slice of planning cost: local minima merge into one basin">
 </p>
+-->
 
 ### 6.2 Ensemble Kalman Inversion (EKI)
 
