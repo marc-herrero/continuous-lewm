@@ -1,0 +1,38 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyTorch checkpoints and large binaries
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.h5
+*.hdf5
+checkpoints/*.pt
+checkpoints/*.pth
+
+# Replay buffers and datasets
+data/
+*.zarr
+*.pkl
+*.npy
+
+# Environment and IDE
+.env
+.venv
+env/
+venv/
+ENV/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Experiment logs and temp files
+wandb/
+runs/
+logs/
+*.log
+.DS_Store
