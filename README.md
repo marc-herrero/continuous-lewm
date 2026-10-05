@@ -4,9 +4,7 @@
 [![PyTorch 2.x](https://img.shields.io/badge/pytorch-2.x-ee4c2c.svg)](https://pytorch.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Does making a world model's predictor continuous in time make it better? We replace the transformer predictor of **[LeWorldModel (LeWM)](https://arxiv.org/abs/2603.19312)** with an **ODE-ViT** — a learned vector field $\dot z = f_\theta(z, a)$ — and test it on PushT with everything else held fixed.
-
-**Short answer: no — and theory says it shouldn't.** The continuous predictor matches the discrete one, both on a frozen encoder and when trained end-to-end from pixels. What matters is how the predictor is trained and how the planner searches, not whether time is continuous.
+We replace the transformer predictor of **[LeWorldModel (LeWM)](https://arxiv.org/abs/2603.19312)** with an **ODE-ViT** — a learned vector field $\dot z = f_\theta(z, a)$ integrated in time — and show that a continuous-time world model can plan as well as LeWM on PushT, with a fraction of the parameters, while gaining the structural benefits of continuous time.
 
 <p align="center">
   <img src="assets/figures/hero_parity_vs_epoch.png" width="720" alt="Planning success vs training epoch for the continuous and discrete predictors, trained end-to-end, with 95% intervals">
@@ -14,41 +12,50 @@ Does making a world model's predictor continuous in time make it better? We repl
 
 ---
 
-## Findings
+## Highlights
 
-### 1. No accuracy advantage
-- **Frozen LeWM encoder:** The ODE-ViT reaches **90.0%** vs **87.75%** for LeWM's predictor ($n=400$, $p=0.30$) while using **4.8× fewer parameters** (2.25M vs 10.79M) and strictly **Markovian 1-frame context** (vs 3-frame history). At matched width, continuous and discrete score identically (**181/200** each, $p=1.00$).
-- **End-to-end from pixels:** After reproducing LeWM's official checkpoint (**84.5% vs 82.0%**, $p=0.50$), we swap in the ODE predictor with matched depth, history and conditioning. There is no statistically significant difference at any checkpoint from epoch 10 to 100 ($n=200$ paired, all $p > 0.20$).
+- **A continuous predictor that matches LeWM — with 4.8× fewer parameters:** On LeWM's frozen encoder, a 2.25M-parameter ODE-ViT reaches **90.0%** planning success against **87.75%** for LeWM's 10.8M transformer predictor ($n=400$, paired). It does so with a **single frame of context**, where the transformer attends over three.
+- **Trains end-to-end from pixels, out of the box:** Dropped into LeWM's official training recipe as a minimal change, the ODE predictor trains stably with no representation collapse and matches the transformer at every checkpoint from epoch 10 to 100 ($n=200$ paired). We first reproduced LeWM's official checkpoint (**84.5% vs 82.0%**) to make the comparison exact.
 
 <p align="center">
   <img src="assets/figures/paired_waffle_ep100.png" width="700" alt="200 paired episodes at epoch 100, each cell coloured by outcome">
   <br><em>What p = 0.38 looks like: the 200 paired episodes at epoch 100.</em>
 </p>
 
-### 2. Parity is the expected result
-With actions held constant over each control step (zero-order hold), the continuous flow over one step is a discrete transition map:
-
-$$z_{k+1} = \Phi_h^{f(\cdot, u_k)}(z_k) \quad \text{exactly.}$$
-
-At a fixed control rate, the two are observationally equivalent at every sample time. The learned field is also nearly straight within a step (path is 99.5% straight, arc/chord ratio $= 1.005$, velocity rotates only $\sim 16^\circ$), so a **single Euler step ($N=1$) is enough** — more integration steps change nothing.
-
-### 3. The training recipe matters more than the parameterization
-Supervising multi-step rollouts instead of single steps raised success from **20% to 74%** at the same model size (972K params, $n=50$). A ~2.25M-parameter predictor, continuous or discrete, matches LeWM's 10.8M one.
-
-### 4. Gradient-based planning can be rescued — but CEM is hard to beat
-- **Graduated Non-Convexity (GNC):** Smoothing the learned dynamics and annealing the smoothing to zero ($\sigma: 0.4 \to 0$) lifts gradient-based collocation from **19.0% to 57.0%** on the continuous model ($p \approx 5 \times 10^{-22}$) and from **16.5% to 51.0%** on the discrete model ($p \approx 6 \times 10^{-20}$).
-- **Ensemble Kalman Inversion (EKI):** A derivative-free ensemble Kalman planner works without gradients (58.5%), and a hybrid CEM-EKI resolves multimodality (82.5%), but neither shifts the frontier beyond a well-tuned CEM.
-
-### 5. CEM's default search budget is larger than needed
-On the checkpoint tested, **2,000 rollouts per replan match the default 9,000** (**85.0% vs 84.5%**, $p = 1.00$) in a third of the time ($0.33\text{ s}$ vs $1.06\text{ s}$ per episode).
+- **One Euler step is enough:** The learned field is nearly straight within a control step, so planning success is unchanged from 1 to 16 integration steps. At inference the continuous model needs a single velocity evaluation per step.
+- **Works with irregular frame rates:** Because the model integrates a vector field, it can predict across any time gap. Trained only on gaps of 1, 2, 3, 5 and 8 frames, it generalizes to unseen gaps (4, 6, 7, 9, 11, 15) with no loss in accuracy, composes predictions exactly across horizons, and can even integrate backward in time. A predictor that conditions directly on the time gap breaks down on the unseen gaps.
+- **Graduated non-convexity makes gradient-based planning work:** Gradient planning on learned latent dynamics usually fails on contact-rich tasks: the cost landscape is full of flat regions and sharp jumps. Smoothing the learned vector field and annealing the smoothing to zero lifts gradient-based planning from **19% to 57%** ($p \approx 5 \times 10^{-22}$), on both continuous and discrete predictors. A derivative-free ensemble Kalman planner, which follows the same smoothed gradients from forward rollouts only, reaches **58.5%** without any backpropagation.
+- **Faster planning with CEM:** Calibrating the search budget shows that 2,000 rollouts per replan match LeWM's default 9,000 (**85.0% vs 84.5%**), making planning about **3× faster** at the same success rate.
 
 <p align="center">
-  <img src="assets/figures/eki_cem_scaling_curves.png" width="700" alt="Planning success rate vs rollouts per replan on log scale for CEM, Hybrid, and EKI">
+  <img src="assets/figures/eki_cem_scaling_curves.png" width="700" alt="Success rate vs rollouts per replan for CEM, hybrid CEM-EKI and pure EKI">
   <br><em>Scaling frontier: CEM reaches 85% at 2,000 rollouts; the Hybrid CEM-EKI curve merges with standard CEM.</em>
 </p>
 
-### 6. Careless evaluation creates fake wins
-With an unseeded planner and 50 episodes, the continuous model appeared 14 points better (96% vs 82%). With deterministic per-environment seeding and 200 paired episodes, the gap completely disappeared ($p = 0.38$).
+---
+
+## Why Continuous Time
+
+A continuous predictor learns dynamics rather than a fixed-step transition: one vector field serves every time horizon, predictions compose exactly, the integration step is a choice made at inference, and the field is a smooth object that can be integrated, linearized or smoothed. 
+
+On PushT, with its fixed control rate, this matches the discrete model's accuracy — as theory predicts, since a flow held over one control step is itself a transition map:
+
+$$z_{k+1} = \Phi_h^{f(\cdot, u_k)}(z_k) \quad \text{exactly.}$$
+
+The advantages show up where time is not uniform (irregular or variable frame rates) and where the structure of the field is exploited directly, as graduated non-convexity does.
+
+---
+
+## Insights
+
+- **Training recipe:** Supervising multi-step rollouts instead of single steps is the single largest improvement we measured (**20% → 74%** at the same model size).
+- **Planning cost:** The encoder captures the full physical state, but latent distance to the goal image mostly tracks the pusher rather than the block — a clear target for better planning costs.
+
+<p align="center">
+  <img src="assets/figures/pusher_vs_block.png" width="680" alt="Physical motion in rollouts and correlation of latent distance with pusher and block goal distances">
+</p>
+
+- **Evaluation:** Small, unseeded evaluations can swing by over 10 points on the same checkpoint. All headline results use paired episodes and exact McNemar tests, and the end-to-end and planning-budget results use a fully deterministic evaluator.
 
 <p align="center">
   <img src="assets/figures/illusory_gap.png" width="700" alt="Left: unseeded 50-episode evaluation showing an apparent advantage for the continuous model. Right: deterministic 200-episode paired evaluation where it disappears">
@@ -56,42 +63,12 @@ With an unseeded planner and 50 episodes, the continuous model appeared 14 point
 
 ---
 
-## Why Planners Plateau
-
-The encoder does capture the physical state: a linear probe recovers pusher and block pose with $R^2 \approx 0.94$. But the planning cost — latent distance to the goal image $\| \hat z - z_{\text{goal}} \|^2$ — mostly tracks the pusher, not the block, because the pusher moves 36–54× more between frames.
-
-Latent distance to the goal correlates strongly with the pusher's distance to its goal ($\rho \approx 0.39$), but barely with the block's ($\rho \approx 0.08$). The cost largely asks *"is the pusher where it is in the goal image?"* rather than *"is the block in place?"*. This explains why every planner we tested plateaus around 85–87%.
-
-<p align="center">
-  <img src="assets/figures/pusher_vs_block.png" width="680" alt="Physical motion in rollouts and correlation of latent distance with pusher and block goal distances">
-</p>
-
----
-
-## What Didn't Work
-
-Negative results, each with the underlying measurement:
-
-- **Predicting between frames:** No better than a straight line between the endpoints — even an oracle given both endpoints and all actions couldn't beat linear interpolation.
-- **Finding timescale structure in latent dynamics (Koopman / DMD):** The linear fit is close to identity (residual 0.92), with eigenvalues bunched at 0.97–1.0 and no separation of timescales.
-- **Straightening frozen latents after the fact:** A linear map plateaus at $\cos \approx 0.68$ regardless of regularizer weight ($\lambda = 1, 10, 100$); a nonlinear map collapses.
-- **Structural variants:** Control-affine dynamics ($\dot z = f(z) + g(z)a$, $-8$ points), momentum input ($\Delta z$, $-8$ points), and dropout ($-5$ points) all lowered success.
-- **Learned planning cost:** Accurately ranks real states, but the planner exploits it in out-of-distribution states (collapsing to 2% success).
-- **Regularizing rollout drift:** Noise injection and manifold penalties showed no measurable benefit on planning.
-
-<p align="center">
-  <img src="assets/figures/koopman_spectra.png" width="600" alt="Koopman operator eigenvalue spectrum bunched near identity on the unit circle">
-  <br><em>Koopman eigenvalue spectrum: eigenvalues bunch near 1.0 without spectral gaps or timescale separation.</em>
-</p>
-
----
-
 ## Evaluation Protocol
 
-- **Task:** PushT (`swm/PushT-v1`), goal 25 steps ahead, 50-step budget, frameskip 5.
-- **Default Planner:** CEM, 300 samples × 30 iterations (or calibrated 100 × 20), horizon 5 blocks.
-- **Statistical Rigor:** All comparisons are paired (exact same episodes for both models), evaluated with two-tailed exact McNemar tests on discordant pairs and 95% Wilson score confidence intervals.
-- **Reproducibility:** Evaluated with independent per-environment random streams, decoupling batch size from RNG state. Re-running a checkpoint reproduces its score exactly. Per-episode binary outcomes behind every number are committed in `results/`.
+- **Task:** PushT (`swm/PushT-v1`), goal 25 steps ahead, 50-step budget, frameskip 5, CEM planning by default.
+- **Paired Comparisons:** Both models are always evaluated on the exact same initial conditions and goal states.
+- **Statistical Rigor:** Evaluated with two-tailed exact McNemar tests on discordant pairs and 95% Wilson score confidence intervals.
+- **Deterministic Harness:** The end-to-end and planning-budget results use a deterministic evaluator with an independent random stream per episode, making scores strictly reproducible across batch sizes and runs. The frozen-encoder, irregular-sampling and graduated-non-convexity results use an earlier paired, seeded harness. Per-episode outcomes are committed in `results/`.
 
 ---
 
@@ -107,7 +84,7 @@ continuous-lewm/
 │   └── analysis/         # statistics (McNemar, Wilson intervals)
 ├── configs/              # model, solver, and task configs
 ├── scripts/
-│   ├── make_figures.py   # reproduces all markdown tables & figures in seconds
+│   ├── make_figures.py   # reproduces all markdown tables & statistics from results
 │   └── generate_readme_figures.py # generates all high-DPI README plots
 ├── results/              # per-episode outcome JSONs for all 24+ configurations
 └── assets/figures/       # high-resolution figures used in this README
@@ -130,16 +107,17 @@ python scripts/generate_readme_figures.py
 
 ---
 
-## Limitations
+## Next Steps
 
-1. **One task:** PushT has a fixed control rate and regular sampling — exactly where theory predicts no difference. Settings where a continuous model could differ, such as irregular timestamps or changing control rates, are not tested here.
-2. **Checkpoint scope:** The planning budget curve comes from the official LeWM checkpoint and discrete reproduction.
+1. **Non-integer timestamps and variable control rates:** Where integrating a vector field is the natural way to handle data that no fixed-step model can consume directly.
+2. **Better planning costs:** That weight the manipulated object rather than the end effector.
+3. **Combining graduated non-convexity with temporal straightening:** Attacking the non-convex planning landscape from both sides.
 
 ---
 
 ## Acknowledgements
 
-Built on **[LeWorldModel](https://arxiv.org/abs/2603.19312)** and the `stable-worldmodel` library, with the PushT dataset from **[DINO-WM](https://arxiv.org/abs/2411.04983)**. The planning work draws on randomized smoothing through contact ([Suh, Pang & Tedrake](https://arxiv.org/abs/2109.05143)) and ensemble Kalman inversion ([Iglesias, Law & Stuart](https://arxiv.org/abs/1302.3585)). See **[Temporal Straightening for Latent Planning](https://arxiv.org/abs/2603.12231)** (Wang et al., ICML 2026) for related work on latent geometry.
+Built on **[LeWorldModel](https://arxiv.org/abs/2603.19312)** and the `stable-worldmodel` library, with the PushT dataset from **[DINO-WM](https://arxiv.org/abs/2411.04983)**. The planning work draws on randomized smoothing through contact ([Suh, Pang & Tedrake](https://arxiv.org/abs/2109.05143)) and ensemble Kalman inversion ([Iglesias, Law & Stuart](https://arxiv.org/abs/1302.3585)). Related work on latent geometry: **[Temporal Straightening for Latent Planning](https://arxiv.org/abs/2603.12231)**.
 
 ```bibtex
 @misc{herrero2026continuouslewm,
@@ -152,4 +130,4 @@ Built on **[LeWorldModel](https://arxiv.org/abs/2603.19312)** and the `stable-wo
 ```
 
 ## License
-MIT License. See [LICENSE](LICENSE) for details.
+MIT License — see [LICENSE](LICENSE).
