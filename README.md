@@ -7,7 +7,8 @@
 We replace the transformer predictor of **[LeWorldModel (LeWM)](https://arxiv.org/abs/2603.19312)** with an **ODE-ViT** — a learned vector field $\dot z = f_\theta(z, a)$ integrated in time — and show that a continuous-time world model can plan as well as LeWM on PushT, with a fraction of the parameters, while gaining the structural benefits of continuous time.
 
 <p align="center">
-  <img src="assets/figures/hero_parity_vs_epoch.png" width="720" alt="Planning success vs training epoch for the continuous and discrete predictors, trained end-to-end, with 95% intervals">
+  <img src="assets/figures/pusht_success_triptych.gif" width="720" alt="PushT execution: agent planning with ODE-ViT slotting the T-block into the target">
+  <br><em>Autonomous MPC planning in PushT with the learned continuous ODE-ViT predictor.</em>
 </p>
 
 ---
@@ -18,11 +19,22 @@ We replace the transformer predictor of **[LeWorldModel (LeWM)](https://arxiv.or
 - **Trains end-to-end from pixels, out of the box:** Dropped into LeWM's official training recipe as a minimal change, the ODE predictor trains stably with no representation collapse and matches the transformer at every checkpoint from epoch 10 to 100 ($n=200$ paired). We first reproduced LeWM's official checkpoint (**84.5% vs 82.0%**) to make the comparison exact.
 
 <p align="center">
+  <img src="assets/figures/hero_parity_vs_epoch.png" width="700" alt="Planning success vs training epoch for the continuous and discrete predictors, trained end-to-end, with 95% intervals">
+  <br><em>Sampled-data parity: Discrete vs continuous latent predictors across pixel-level training epochs.</em>
+</p>
+
+<p align="center">
   <img src="assets/figures/paired_waffle_ep100.png" width="700" alt="200 paired episodes at epoch 100, each cell coloured by outcome">
   <br><em>What p = 0.38 looks like: the 200 paired episodes at epoch 100.</em>
 </p>
 
-- **One Euler step is enough:** The learned field is nearly straight within a control step, so planning success is unchanged from 1 to 16 integration steps. At inference the continuous model needs a single velocity evaluation per step.
+- **One Euler step is enough:** The learned field is nearly straight within a control step (arc/chord ratio $= 1.005$, 99.5% straight), so planning success is unchanged from 1 to 16 integration steps. At inference the continuous model needs a single velocity evaluation per step.
+
+<p align="center">
+  <img src="assets/figures/euler_steps_overlay.png" width="680" alt="Integration step overlay N=1 vs N=16 with zoomed endpoint">
+  <br><em>Flow invariance: Endpoints of N=1, 2, 4, 16 Euler integration steps coincide within 0.2% tolerance.</em>
+</p>
+
 - **Works with irregular frame rates:** Because the model integrates a vector field, it can predict across any time gap. Trained only on gaps of 1, 2, 3, 5 and 8 frames, it generalizes to unseen gaps (4, 6, 7, 9, 11, 15) with no loss in accuracy, composes predictions exactly across horizons, and can even integrate backward in time. A predictor that conditions directly on the time gap breaks down on the unseen gaps.
 - **Graduated non-convexity makes gradient-based planning work:** Gradient planning on learned latent dynamics usually fails on contact-rich tasks: the cost landscape is full of flat regions and sharp jumps. Smoothing the learned vector field and annealing the smoothing to zero lifts gradient-based planning from **19% to 57%** ($p \approx 5 \times 10^{-22}$), on both continuous and discrete predictors. A derivative-free ensemble Kalman planner, which follows the same smoothed gradients from forward rollouts only, reaches **58.5%** without any backpropagation.
 - **Faster planning with CEM:** Calibrating the search budget shows that 2,000 rollouts per replan match LeWM's default 9,000 (**85.0% vs 84.5%**), making planning about **3× faster** at the same success rate.
@@ -37,6 +49,16 @@ We replace the transformer predictor of **[LeWorldModel (LeWM)](https://arxiv.or
 ## Why Continuous Time
 
 A continuous predictor learns dynamics rather than a fixed-step transition: one vector field serves every time horizon, predictions compose exactly, the integration step is a choice made at inference, and the field is a smooth object that can be integrated, linearized or smoothed. 
+
+<p align="center">
+  <img src="assets/figures/vector_field_pca.png" width="720" alt="Streamlines of the learned vector field in a 2D PCA projection of the latent space for several fixed actions">
+  <br><em>The continuous world model as a dynamical vector field: learned velocity streamlines $\dot z = f_\theta(z, a)$ in latent PCA space.</em>
+</p>
+
+<p align="center">
+  <img src="assets/figures/dense_substep_flow.png" width="680" alt="Dense continuous sub-step flow vs discrete step jump">
+  <br><em>The nature of continuity: Dense physical continuum $z(\tau) = z_0 + \int_0^\tau f_\theta(z, a) d\tau$ vs black-box discrete step jumps.</em>
+</p>
 
 On PushT, with its fixed control rate, this matches the discrete model's accuracy — as theory predicts, since a flow held over one control step is itself a transition map:
 
@@ -87,7 +109,7 @@ continuous-lewm/
 │   ├── make_figures.py   # reproduces all markdown tables & statistics from results
 │   └── generate_readme_figures.py # generates all high-DPI README plots
 ├── results/              # per-episode outcome JSONs for all 24+ configurations
-└── assets/figures/       # high-resolution figures used in this README
+└── assets/figures/       # high-resolution figures and animated GIFs
 ```
 
 ---
