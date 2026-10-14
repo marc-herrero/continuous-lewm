@@ -8,27 +8,27 @@ LeWorldModel ([LeWM](https://arxiv.org/abs/2603.19312)) predicts the next latent
 
 ### Key Comparison at a Glance
 
-| Dimension | LeWorldModel (LeWM) | Continuous-Time LeWM (Ours) | Takeaway |
-| :--- | :---: | :---: | :--- |
-| **Push-T Planning Success** | 87.8% (82–88% on harness) | **90.5%** (181/200 episodes) | **On Par with Full LeWM** |
-| **Predictor Parameters** | 10.8M parameters | **2.55M parameters** | **4.2× Fewer Parameters** |
-| **Observation Context** | 3 frames (history window) | **1 frame (strictly Markovian)** | **Zero History Buffering** |
-| **Dynamics Operator** | Discrete Black-Box Step | **Continuous Field $\dot{z} = f_\theta(z, a)$** | **Any Horizon $\Delta t$** |
-| **Time Reversibility** | Non-Invertible | **Reversible via $-dt$ integration** | **Reconstructs Past Latents (11% error)** |
-| **Gradient Trajectory Planning** | Trapped by contact landscape (19%) | **Graduated Non-Convexity (Lifts to 57%)** | **Velocity mollification ($p \approx 5\times 10^{-22}$)** |
-| **CEM Rollout Budget** | 9,000 rollouts / replan (84.5%) | **2,000 rollouts / replan (85.0%)** | **3× Faster Planning Runtime** |
+| Dimension | LeWorldModel (LeWM) | Continuous-Time LeWM (Ours, `fs1_base`) | Matched Discrete Model (`fs1_discrete`) | Takeaway |
+| :--- | :---: | :---: | :---: | :--- |
+| **Push-T Planning Success\*** | 87.8% | **90.5%** (181/200 episodes) | **90.5%** (181/200 episodes) | Matched-harness parity |
+| **Predictor Parameters** | 10.8M *(total ~15M)* | **2.55M** *(total ~6.7M)* | **2.55M** *(total ~6.7M)* | 4.2× fewer predictor params |
+| **Observation Context** | 3 frames (history window) | **1 frame (strictly Markovian)** | **1 frame (strictly Markovian)** | Zero history buffering |
+| **Dynamics Operator** | Discrete Black-Box Step | **Continuous Field $\dot{z} = f_\theta(z, a)$** | Discrete Step Map | Any horizon $\Delta t$ vs fixed step |
+| **Time Reversibility** | No built-in backward operator | **Reversible via $-dt$ integration** | No built-in backward operator | 11% error at 1 frame, 21% at 6 frames |
+| **Gradient planning, same predictor, without / with GNC** | — *(not evaluated)* | **19% → 57%** | **19% → 57%** | Velocity mollification ($p \approx 5\times 10^{-22}$) |
+
+*\* Evaluated on the frozen visual encoder harness (200 episodes). On the fully deterministic evaluation harness, official LeWM scores 82.0% and our continuous model scores 85.0%. Across both harnesses, performance differences between continuous, discrete, and baseline LeWM are within statistical parity.*
 
 ---
 
 ## Highlights
 
-- **Frame-resolution world model, strong planning, few parameters.** On LeWM's frozen encoder, the frame-level ODE-ViT (`fs1_base`) reaches **90.5% planning success** on PushT (181/200 episodes) with **2.55M predictor parameters** — **4.2× fewer** than LeWM's 10.8M transformer predictor — and a single frame of context instead of three. On our harnesses LeWM's own predictor scores 82–88%, so the continuous model is on par (the differences are not statistically significant).
 - **Any time gap, including gaps never seen in training.** We trained on gaps of 1, 2, 3, 5 and 8 frames only, then evaluated on 4, 6, 7, 9, 11 and 15. The ODE predicts them as accurately as the gaps it was trained on (error 0.31 relative to "nothing changes" = 1.0). Composing discrete fixed steps matches this accuracy on integer gaps, while the continuous formulation handles arbitrary horizons natively and composes identically ($\int_0^8 = \int_0^3 + \int_3^8$, defect = 0.0). Trained only on irregular gaps, the ODE still plans at 88% ($n=100$), level with a matched discrete model (89%).
-- **Backward in time.** Integrating the vector field backward with $-dt$ reconstructs past latents: about **11% error at one frame back**, **21% at six frames back**. Discrete forward step maps have no natural inverse operator.
-- **One Euler step is enough.** On the frozen-encoder model with 5-frame blocks, the field is nearly straight within a step (arc/chord ratio = 1.005), so planning success is identical from 1 to 16 integration steps. At inference that model costs one velocity evaluation per step.
-- **Trains end-to-end from pixels.** Swapped into LeWM's official training recipe as a minimal change, the ODE predictor trains stably with no representation collapse and matches the transformer at every checkpoint from epoch 10 to 100 ($n=200$ paired).
-- **Graduated non-convexity makes gradient planning work.** Smoothing the learned vector field and annealing the smoothing to zero lifts gradient-based planning from 19% to 57% ($p \approx 5 \times 10^{-22}$), on both continuous and discrete predictors. An ensemble Kalman planner follows the same smoothed gradients from forward rollouts only and reaches 58.5% with no backpropagation.
-- **Faster CEM.** 2,000 rollouts per replan match LeWM's default 9,000 (85.0% vs 84.5%), about 3× faster at the same success rate.
+- **Backward in time.** Integrating the vector field backward with $-dt$ reconstructs past latents: about **11% error at one frame back**, **21% at six frames back**. Discrete forward step maps have no built-in backward operator.
+- **Graduated non-convexity makes gradient planning work.** Smoothing the learned vector field with noise and annealing the variance to zero lifts gradient-based trajectory planning from **19% to 57%** ($p \approx 5 \times 10^{-22}$), on both continuous and discrete predictors. An ensemble Kalman planner follows the same smoothed gradients from forward rollouts alone and reaches **58.5%** with no backpropagation.
+- **One Euler step is enough.** On the model with 5-frame blocks, the field is nearly straight within a step (arc/chord ratio = 1.005), so planning success is identical from 1 to 16 integration steps. At inference, that model costs one velocity evaluation per step.
+- **Trains end-to-end from pixels.** Swapped into LeWM's official training recipe as a minimal change, the ODE predictor trains stably from scratch with no representation collapse and matches the transformer at every checkpoint from epoch 10 to 100 ($n=200$ paired).
+- **Reduced CEM budget on macro-step models.** On models operating with 5-frame action blocks, evaluating 2,000 CEM rollouts per replan matches LeWM's default 9,000 (85.0% vs 84.5%), giving a ~3× wall-clock speedup per replan at identical success. (For the frame-level model `fs1_base`, sequential step costs are discussed in Limitations below).
 
 <p align="center">
   <img src="assets/figures/hero_parity_vs_epoch.png" width="800" alt="End-to-end planning success vs training epoch for the continuous and discrete predictors">
@@ -100,14 +100,14 @@ python scripts/evaluate.py --model discrete --ckpt <path> --solver cem --episode
 - **Resolution is set by the data:** The model works at the native frame rate and does not predict between frames.
 - **The held-out-gap study evaluates prediction accuracy:** Closed-loop planning was run with regularly spaced observations, so planning from irregular observations is untested.
 - **Held-out gaps were whole numbers of frames:** Non-integer timestamps and genuinely asynchronous sensors are the natural next test, and the setting where a vector field has the clearest edge.
-- **Frame-level rollouts take more steps per plan** than LeWM's 5-frame blocks, so planning is slower in our implementation.
+- **Frame-level rollouts take more sequential steps per plan:** Because `fs1_base` models dynamics at single-frame resolution (1 action per frame) rather than jumping 5 frames in a single lumped forward pass, a 25-step planning horizon requires 25 sequential integration steps instead of 5 macro steps. In our unoptimized Python evaluation loop, this increases planning wall-clock time per episode relative to coarse macro-step models, even though the sampling budget can be safely reduced.
 - **PushT has a fixed control rate:** Variable control rates and other tasks are untested.
 
 ---
 
 ## Acknowledgements
 
-Built on [LeWorldModel](https://arxiv.org/abs/2603.19312) and the `stable-worldmodel` library, with the PushT dataset from DINO-WM. The continuous predictor architecture adapts [ODE-ViT](https://arxiv.org/abs/2511.16501) (Boned Riera, Romero Sanchez & Ramos Terrades, 2025). The planning work draws on randomized smoothing through contact (Suh, Pang & Tedrake) and ensemble Kalman inversion (Iglesias, Law & Stuart). Related work on latent geometry: [Temporal Straightening for Latent Planning](https://arxiv.org/abs/2603.12231).
+Built on [LeWorldModel](https://arxiv.org/abs/2603.19312) and the `stable-worldmodel` library, with the PushT dataset from DINO-WM. The continuous predictor architecture adapts [ODE-ViT](https://arxiv.org/abs/2511.16501) (Boned Riera, Romero Sanchez & Ramos Terrades, 2025). The planning work draws on randomized smoothing through contact ([Suh, Pang & Tedrake, 2022](https://arxiv.org/abs/2106.03151)) and ensemble Kalman inversion ([Iglesias, Law & Stuart, 2013](https://arxiv.org/abs/1302.6343)). Related work on latent geometry: [Temporal Straightening for Latent Planning](https://arxiv.org/abs/2603.12231).
 
 ---
 
@@ -118,7 +118,7 @@ Built on [LeWorldModel](https://arxiv.org/abs/2603.19312) and the `stable-worldm
   title  = {Continuous-Time LeWM: A World Model Across Any Time Gap},
   author = {Herrero, M.},
   year   = {2026},
-  note   = {Bachelor's thesis, Computer Vision Center (CVC)},
+  note   = {Research project, Computer Vision Center (CVC)},
   url    = {https://github.com/marc-herrero/continuous-lewm}
 }
 
