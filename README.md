@@ -1,155 +1,121 @@
-# Continuous-Time Predictors for JEPA World Models
+# Continuous-Time LeWM: A World Model Across Any Time Gap
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![PyTorch 2.x](https://img.shields.io/badge/pytorch-2.x-ee4c2c.svg)](https://pytorch.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
-We replace the transformer predictor of **[LeWorldModel (LeWM)](https://arxiv.org/abs/2603.19312)** with an **ODE-ViT** — a learned vector field $\dot z = f_\theta(z, a)$ integrated in time — and show that a continuous-time world model can plan as well as LeWM on PushT, with a fraction of the parameters, while gaining the structural benefits of continuous time.
+LeWorldModel ([LeWM](https://arxiv.org/abs/2603.19312)) predicts the next latent state in fixed blocks of 5 frames, with the 5 actions of each block lumped into one vector. We replace its transformer predictor with an ODE-ViT, a learned vector field $\dot z = f_\theta(z, a)$, and run it at frame resolution: one action per frame, integrated step by step. The same model can then be asked what the world looks like any number of frames ahead (or behind), including gaps it never saw in training.
 
 <p align="center">
-  <img src="assets/figures/pusht_success_triptych.gif" width="720" alt="PushT execution: agent planning with ODE-ViT slotting the T-block into the target">
-  <br><em>Autonomous MPC planning in PushT with the learned continuous ODE-ViT predictor.</em>
+  <img src="assets/figures/heldout_gap_error.png" width="800" alt="Prediction error vs time gap for the continuous predictor and two discrete alternatives, on gaps seen in training and gaps never seen">
 </p>
 
 ---
 
 ## Highlights
 
-- **A continuous predictor that matches LeWM — with 4.8× fewer parameters:** On LeWM's frozen encoder, a 2.25M-parameter ODE-ViT reaches **90.0%** planning success against **87.75%** for LeWM's 10.8M transformer predictor ($n=400$, paired). It does so with a **single frame of context**, where the transformer attends over three.
-- **Trains end-to-end from pixels, out of the box:** Dropped into LeWM's official training recipe as a minimal change, the ODE predictor trains stably with no representation collapse and matches the transformer at every checkpoint from epoch 10 to 100 ($n=200$ paired). We first reproduced LeWM's official checkpoint (**84.5% vs 82.0%**) to make the comparison exact.
+- **Frame-resolution world model, strong planning, few parameters.** On LeWM's frozen encoder, the frame-level ODE-ViT (`fs1_base`) reaches **90.5% planning success** on PushT (181/200 episodes) with **2.55M predictor parameters** — **4.2× fewer** than LeWM's 10.8M transformer predictor — and a single frame of context instead of three. On our harnesses LeWM's own predictor scores 82–88%, so the continuous model is on par (the differences are not statistically significant).
+- **Any time gap, including gaps never seen in training.** We trained on gaps of 1, 2, 3, 5 and 8 frames only, then evaluated on 4, 6, 7, 9, 11 and 15. The ODE predicts them as accurately as the gaps it was trained on (error 0.31 relative to "nothing changes" = 1.0). A model that takes the gap as an input and jumps there in one shot fails (0.83) and gives inconsistent answers when its predictions are composed. The ODE composes exactly: predicting 3 frames then 5 frames matches predicting 8 directly. Trained only on irregular gaps, the ODE still plans at 88% ($n=100$), level with a matched discrete model (89%).
+- **Backward in time.** Integrating the field with negative time reconstructs past latents: about 11% error at one frame back, 21% at six.
+- **One Euler step is enough.** On the frozen-encoder model with 5-frame blocks, the field is nearly straight within a step, so planning success is the same from 1 to 16 integration steps. At inference that model costs one velocity evaluation per step.
+- **Trains end-to-end from pixels.** Swapped into LeWM's official training recipe as a minimal change, the ODE predictor trains stably with no representation collapse and matches the transformer at every checkpoint from epoch 10 to 100 ($n=200$ paired).
+- **Graduated non-convexity makes gradient planning work.** Smoothing the learned vector field and annealing the smoothing to zero lifts gradient-based planning from 19% to 57% ($p \approx 5 \times 10^{-22}$), on both continuous and discrete predictors. An ensemble Kalman planner follows the same smoothed gradients from forward rollouts only and reaches 58.5% with no backpropagation.
+- **Faster CEM.** 2,000 rollouts per replan match LeWM's default 9,000 (85.0% vs 84.5%), about 3× faster at the same success rate.
 
 <p align="center">
-  <img src="assets/figures/hero_parity_vs_epoch.png" width="700" alt="Planning success vs training epoch for the continuous and discrete predictors, trained end-to-end, with 95% intervals">
-  <br><em>Sampled-data parity: Discrete vs continuous latent predictors across pixel-level training epochs.</em>
+  <img src="assets/figures/hero_parity_vs_epoch.png" width="800" alt="End-to-end planning success vs training epoch for the continuous and discrete predictors">
 </p>
 
-<p align="center">
-  <img src="assets/figures/paired_waffle_ep100.png" width="700" alt="200 paired episodes at epoch 100, each cell coloured by outcome">
-  <br><em>What p = 0.38 looks like: the 200 paired episodes at epoch 100.</em>
-</p>
+---
 
-- **One Euler step is enough:** The learned field is nearly straight within a control step (arc/chord ratio $= 1.005$, 99.5% straight), so planning success is unchanged from 1 to 16 integration steps. At inference the continuous model needs a single velocity evaluation per step.
+## How It Works
 
-<p align="center">
-  <img src="assets/figures/euler_steps_overlay.png" width="680" alt="Integration step overlay N=1 vs N=16 with zoomed endpoint">
-  <br><em>Flow invariance: Endpoints of N=1, 2, 4, 16 Euler integration steps coincide within 0.2% tolerance.</em>
-</p>
-
-- **Works with irregular frame rates:** Because the model integrates a vector field, it can predict across any time gap. Trained only on gaps of 1, 2, 3, 5 and 8 frames, it generalizes to unseen gaps (4, 6, 7, 9, 11, 15) with no loss in accuracy, composes predictions exactly across horizons, and can even integrate backward in time. A predictor that conditions directly on the time gap breaks down on the unseen gaps.
-- **Graduated non-convexity makes gradient-based planning work:** Gradient planning on learned latent dynamics usually fails on contact-rich tasks: the cost landscape is full of flat regions and sharp jumps. Smoothing the learned vector field and annealing the smoothing to zero lifts gradient-based planning from **19% to 57%** ($p \approx 5 \times 10^{-22}$), on both continuous and discrete predictors. A derivative-free ensemble Kalman planner, which follows the same smoothed gradients from forward rollouts only, reaches **58.5%** without any backpropagation.
-- **Faster planning with CEM:** Calibrating the search budget shows that 2,000 rollouts per replan match LeWM's default 9,000 (**85.0% vs 84.5%**), making planning about **3× faster** at the same success rate.
-
-<p align="center">
-  <img src="assets/figures/eki_cem_scaling_curves.png" width="700" alt="Success rate vs rollouts per replan for CEM, hybrid CEM-EKI and pure EKI">
-  <br><em>Scaling frontier: CEM reaches 85% at 2,000 rollouts; the Hybrid CEM-EKI curve merges with standard CEM.</em>
-</p>
+- **Frame-level actions.** Each raw 2-D action drives one frame of integration, so the model always knows which action applies when. LeWM's 10-D lumped block is replaced by five ordered steps.
+- **Segment-aligned integration.** Actions change at frame boundaries, so each frame is integrated separately and the state carries over continuously. This keeps the solver accurate across action changes.
+- **Random time gaps in training.** Each batch samples a gap (1 to 25 frames) and supervises the prediction against the real latent at that frame, weighted $1/\sqrt{\Delta}$. One field has to explain every horizon, which is what lets it generalize to new gaps.
+- **Randomized solver steps.** The number of Euler sub-steps varies during training, so the field does not depend on a particular step size.
+- **Multi-step rollouts.** Supervising multi-step rollouts instead of single steps was the largest single improvement (20% to 74% at the same size, $n=50$).
 
 ---
 
 ## Why Continuous Time
 
-A continuous predictor learns dynamics rather than a fixed-step transition: one vector field serves every time horizon, predictions compose exactly, the integration step is a choice made at inference, and the field is a smooth object that can be integrated, linearized or smoothed. 
-
-<p align="center">
-  <img src="assets/figures/vector_field_pca.png" width="720" alt="Streamlines of the learned vector field in a 2D PCA projection of the latent space for several fixed actions">
-  <br><em>The continuous world model as a dynamical vector field: learned velocity streamlines $\dot z = f_\theta(z, a)$ in latent PCA space.</em>
-</p>
-
-<p align="center">
-  <img src="assets/figures/dense_substep_flow.png" width="680" alt="Dense continuous sub-step flow vs discrete step jump">
-  <br><em>The nature of continuity: Dense physical continuum $z(\tau) = z_0 + \int_0^\tau f_\theta(z, a) d\tau$ vs black-box discrete step jumps.</em>
-</p>
-
-On PushT, with its fixed control rate, this matches the discrete model's accuracy — as theory predicts, since a flow held over one control step is itself a transition map:
-
-$$z_{k+1} = \Phi_h^{f(\cdot, u_k)}(z_k) \quad \text{exactly.}$$
-
-The advantages show up where time is not uniform (irregular or variable frame rates) and where the structure of the field is exploited directly, as graduated non-convexity does.
+One vector field serves every horizon, predictions compose exactly, the step size is chosen at inference, and the field is a smooth object that can be integrated backward or smoothed for planning. At a fixed control rate this matches a discrete model's accuracy, which is expected: a flow held over one control step is itself a transition map. Where time is uneven, the continuous formulation takes any gap natively. A model that composes fixed steps generalizes to unseen integer gaps similarly, so the clearest advantages are non-integer steps (next step below), backward integration and the smoothing used in planning.
 
 ---
 
-## Insights
+## Other Findings
 
-- **Training recipe:** Supervising multi-step rollouts instead of single steps is the single largest improvement we measured (**20% → 74%** at the same model size).
-- **Planning cost:** The encoder captures the full physical state, but latent distance to the goal image mostly tracks the pusher rather than the block — a clear target for better planning costs.
-
-<p align="center">
-  <img src="assets/figures/pusher_vs_block.png" width="680" alt="Physical motion in rollouts and correlation of latent distance with pusher and block goal distances">
-</p>
-
-- **Evaluation:** Small, unseeded evaluations can swing by over 10 points on the same checkpoint. All headline results use paired episodes and exact McNemar tests, and the end-to-end and planning-budget results use a fully deterministic evaluator.
-
-<p align="center">
-  <img src="assets/figures/illusory_gap.png" width="700" alt="Left: unseeded 50-episode evaluation showing an apparent advantage for the continuous model. Right: deterministic 200-episode paired evaluation where it disappears">
-</p>
+- **The training recipe matters most.** Multi-step supervision outweighed every architectural choice we tried.
+- **The planning cost tracks the pusher.** The encoder captures the full physical state, but latent distance to the goal image follows the pusher more than the block. That likely limits every planner near 85% and points to better costs.
+- **Evaluation needs care.** Small unseeded evaluations swung by more than 10 points on the same checkpoint. Headline comparisons use paired episodes and exact McNemar tests, and the end-to-end and budget results use a fully deterministic evaluator.
+- **Also explored, without gains:** between-frame prediction, Koopman/DMD analysis, post-hoc latent straightening, control-affine and momentum variants, dropout, a learned planning cost, and rollout-drift regularizers.
 
 ---
 
 ## Evaluation Protocol
 
-- **Task:** PushT (`swm/PushT-v1`), goal 25 steps ahead, 50-step budget, frameskip 5, CEM planning by default.
-- **Paired Comparisons:** Both models are always evaluated on the exact same initial conditions and goal states.
-- **Statistical Rigor:** Evaluated with two-tailed exact McNemar tests on discordant pairs and 95% Wilson score confidence intervals.
-- **Deterministic Harness:** The end-to-end and planning-budget results use a deterministic evaluator with an independent random stream per episode, making scores strictly reproducible across batch sizes and runs. The frozen-encoder, irregular-sampling and graduated-non-convexity results use an earlier paired, seeded harness. Per-episode outcomes are committed in `results/`.
+PushT (`swm/PushT-v1`), goal 25 steps ahead, 50-step budget, CEM (300 samples × 30 iterations) unless stated. Both models in a comparison are evaluated on the same episodes. The end-to-end and planning-budget results use a deterministic evaluator with an independent random stream per episode; the frozen-encoder, irregular-gap and graduated-non-convexity results use an earlier paired, seeded harness. The held-out-gap study uses a model trained only on gaps $\{1, 2, 3, 5, 8\}$. Per-episode outcomes are in [`results/`](results/).
 
 ---
 
 ## Repository Structure
 
-```text
-continuous-lewm/
-├── cwm/
-│   ├── models/           # ODE-ViT velocity predictor, discrete predictor, encoders
-│   ├── solvers/          # cem.py, collocation.py (augmented Lagrangian), gnc.py,
-│   │                     # ensemble_kalman.py (EKI + hybrid)
-│   ├── eval/             # deterministic paired evaluator (per-environment streams)
-│   └── analysis/         # statistics (McNemar, Wilson intervals)
-├── configs/              # model, solver, and task configs
-├── scripts/
-│   ├── make_figures.py   # reproduces all markdown tables & statistics from results
-│   └── generate_readme_figures.py # generates all high-DPI README plots
-├── results/              # per-episode outcome JSONs for all 24+ configurations
-└── assets/figures/       # high-resolution figures and animated GIFs
+```
+cwm/              models (ODE-ViT, discrete predictors), solvers (CEM, collocation, GNC, EKI), analysis
+scripts/          training, evaluation, and publication figure generators
+results/          per-episode outcomes behind every reported number
+assets/figures/   visualizations, phase portraits, and publication figures
 ```
 
----
-
-## Reproducing the Results
+### Quickstart & Reproduction
 
 ```bash
 git clone https://github.com/marc-herrero/continuous-lewm.git && cd continuous-lewm
 conda env create -f environment.yml && conda activate cwm
 
-# Recompute every table, confidence interval, and p-value in seconds:
-python scripts/make_figures.py --results results/
+# Evaluate continuous ODE predictor
+python scripts/evaluate.py --model ode --ckpt <path> --solver cem --episodes 200
 
-# Regenerate all README publication figures:
-python scripts/generate_readme_figures.py
+# Evaluate matched discrete predictor
+python scripts/evaluate.py --model discrete --ckpt <path> --solver cem --episodes 200
 ```
 
 ---
 
-## Next Steps
+## Limitations and Next Steps
 
-1. **Non-integer timestamps and variable control rates:** Where integrating a vector field is the natural way to handle data that no fixed-step model can consume directly.
-2. **Better planning costs:** That weight the manipulated object rather than the end effector.
-3. **Combining graduated non-convexity with temporal straightening:** Attacking the non-convex planning landscape from both sides.
+- **Resolution is set by the data:** The model works at the native frame rate and does not predict between frames.
+- **The held-out-gap study evaluates prediction accuracy:** Closed-loop planning was run with regularly spaced observations, so planning from irregular observations is untested.
+- **Held-out gaps were whole numbers of frames:** Non-integer timestamps and genuinely asynchronous sensors are the natural next test, and the setting where a vector field has the clearest edge.
+- **Frame-level rollouts take more steps per plan** than LeWM's 5-frame blocks, so planning is slower in our implementation.
+- **PushT has a fixed control rate:** Variable control rates and other tasks are untested.
 
 ---
 
 ## Acknowledgements
 
-Built on **[LeWorldModel](https://arxiv.org/abs/2603.19312)** and the `stable-worldmodel` library, with the PushT dataset from **[DINO-WM](https://arxiv.org/abs/2411.04983)**. The planning work draws on randomized smoothing through contact ([Suh, Pang & Tedrake](https://arxiv.org/abs/2109.05143)) and ensemble Kalman inversion ([Iglesias, Law & Stuart](https://arxiv.org/abs/1302.3585)). Related work on latent geometry: **[Temporal Straightening for Latent Planning](https://arxiv.org/abs/2603.12231)**.
+Built on [LeWorldModel](https://arxiv.org/abs/2603.19312) and the `stable-worldmodel` library, with the PushT dataset from DINO-WM. The continuous predictor architecture adapts [ODE-ViT](https://arxiv.org/abs/2511.16501) (Boned Riera, Romero Sanchez & Ramos Terrades, 2025). The planning work draws on randomized smoothing through contact (Suh, Pang & Tedrake) and ensemble Kalman inversion (Iglesias, Law & Stuart). Related work on latent geometry: [Temporal Straightening for Latent Planning](https://arxiv.org/abs/2603.12231).
+
+---
+
+## Citation
 
 ```bibtex
 @misc{herrero2026continuouslewm,
-  title = {Continuous-Time Predictors for JEPA World Models},
+  title  = {Continuous-Time LeWM: A World Model Across Any Time Gap},
   author = {Herrero, M.},
-  year = {2026},
-  note = {Bachelor's Thesis, Computer Vision Center (CVC)},
-  url = {https://github.com/marc-herrero/continuous-lewm}
+  year   = {2026},
+  note   = {Bachelor's thesis, Computer Vision Center (CVC)},
+  url    = {https://github.com/marc-herrero/continuous-lewm}
+}
+
+@article{boned2025odevit,
+  title   = {ODE-ViT: Plug \& Play Attention Layer from the Generalization of the ViT as an Ordinary Differential Equation},
+  author  = {Boned Riera, Carlos and Romero Sanchez, David and Ramos Terrades, Oriol},
+  journal = {arXiv preprint arXiv:2511.16501},
+  year    = {2025}
 }
 ```
 
+---
+
 ## License
-MIT License — see [LICENSE](LICENSE).
+
+[MIT License](LICENSE) — see `LICENSE` for details.
