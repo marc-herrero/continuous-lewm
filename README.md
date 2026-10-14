@@ -11,13 +11,14 @@ LeWorldModel ([LeWM](https://arxiv.org/abs/2603.19312)) predicts the next latent
 | Dimension | LeWorldModel (LeWM) | Continuous-Time LeWM (Ours, `fs1_base`) | Matched Discrete Model (`fs1_discrete`) | Takeaway |
 | :--- | :---: | :---: | :---: | :--- |
 | **Push-T Planning Success\*** | 87.8% | **90.5%** (181/200 episodes) | **90.5%** (181/200 episodes) | Matched-harness parity |
-| **Predictor Parameters** | 10.8M *(total ~15M)* | **2.55M** *(total ~6.7M)* | **2.55M** *(total ~6.7M)* | 4.2× fewer predictor params |
+| **Predictor Parameters†** | 10.8M *(18.0M total in ckpt)* | **2.55M** *(8.85M deployed)* | **2.55M** *(8.85M deployed)* | 4.2× fewer predictor params |
 | **Observation Context** | 3 frames (history window) | **1 frame (strictly Markovian)** | **1 frame (strictly Markovian)** | Zero history buffering |
 | **Dynamics Operator** | Discrete Black-Box Step | **Continuous Field $\dot{z} = f_\theta(z, a)$** | Discrete Step Map | Any horizon $\Delta t$ vs fixed step |
 | **Time Reversibility** | No built-in backward operator | **Reversible via $-dt$ integration** | No built-in backward operator | 11% error at 1 frame, 21% at 6 frames |
 | **Gradient planning, same predictor, without / with GNC** | — *(not evaluated)* | **19% → 57%** | **19% → 57%** | Velocity mollification ($p \approx 5\times 10^{-22}$) |
 
 *\* Evaluated on the frozen visual encoder harness (200 episodes). On the fully deterministic evaluation harness, official LeWM scores 82.0% and our continuous model scores 85.0%. Across both harnesses, performance differences between continuous, discrete, and baseline LeWM are within statistical parity.*
+*† Parameter counts measured directly from checkpoints: official LeWM contains 10,791,360 predictor parameters and 18,042,672 total in `weights.pt`. `fs1_base` and `fs1_discrete` checkpoints contain 2,549,578 parameters (2,253,130 predictor + 296,448 action encoder); deployed total is 8,847,819 when paired with the 6,298,241 parameter frozen visual backbone (encoder + projector).*
 
 ---
 
