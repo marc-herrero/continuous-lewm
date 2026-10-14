@@ -3,17 +3,29 @@
 LeWorldModel ([LeWM](https://arxiv.org/abs/2603.19312)) predicts the next latent state in fixed blocks of 5 frames, with the 5 actions of each block lumped into one vector. We replace its transformer predictor with an ODE-ViT, a learned vector field $\dot z = f_\theta(z, a)$, and run it at frame resolution: one action per frame, integrated step by step. The same model can then be asked what the world looks like any number of frames ahead (or behind), including gaps it never saw in training.
 
 <p align="center">
-  <img src="assets/figures/heldout_gap_error.png" width="800" alt="Prediction error vs time gap for the continuous predictor and two discrete alternatives, on gaps seen in training and gaps never seen">
+  <img src="assets/figures/vector_field_pca.png" width="900" alt="Learned vector field streamlines in latent space under Push Right, Push Up, and Push Diagonal actions">
 </p>
+
+### Key Comparison at a Glance
+
+| Dimension | LeWorldModel (LeWM) | Continuous-Time LeWM (Ours) | Takeaway |
+| :--- | :---: | :---: | :--- |
+| **Push-T Planning Success** | 87.8% (82–88% on harness) | **90.5%** (181/200 episodes) | **On Par with Full LeWM** |
+| **Predictor Parameters** | 10.8M parameters | **2.55M parameters** | **4.2× Fewer Parameters** |
+| **Observation Context** | 3 frames (history window) | **1 frame (strictly Markovian)** | **Zero History Buffering** |
+| **Dynamics Operator** | Discrete Black-Box Step | **Continuous Field $\dot{z} = f_\theta(z, a)$** | **Any Horizon $\Delta t$** |
+| **Time Reversibility** | Non-Invertible | **Reversible via $-dt$ integration** | **Reconstructs Past Latents (11% error)** |
+| **Gradient Trajectory Planning** | Trapped by contact landscape (19%) | **Graduated Non-Convexity (Lifts to 57%)** | **Velocity mollification ($p \approx 5\times 10^{-22}$)** |
+| **CEM Rollout Budget** | 9,000 rollouts / replan (84.5%) | **2,000 rollouts / replan (85.0%)** | **3× Faster Planning Runtime** |
 
 ---
 
 ## Highlights
 
 - **Frame-resolution world model, strong planning, few parameters.** On LeWM's frozen encoder, the frame-level ODE-ViT (`fs1_base`) reaches **90.5% planning success** on PushT (181/200 episodes) with **2.55M predictor parameters** — **4.2× fewer** than LeWM's 10.8M transformer predictor — and a single frame of context instead of three. On our harnesses LeWM's own predictor scores 82–88%, so the continuous model is on par (the differences are not statistically significant).
-- **Any time gap, including gaps never seen in training.** We trained on gaps of 1, 2, 3, 5 and 8 frames only, then evaluated on 4, 6, 7, 9, 11 and 15. The ODE predicts them as accurately as the gaps it was trained on (error 0.31 relative to "nothing changes" = 1.0). A model that takes the gap as an input and jumps there in one shot fails (0.83) and gives inconsistent answers when its predictions are composed. The ODE composes exactly: predicting 3 frames then 5 frames matches predicting 8 directly. Trained only on irregular gaps, the ODE still plans at 88% ($n=100$), level with a matched discrete model (89%).
-- **Backward in time.** Integrating the field with negative time reconstructs past latents: about 11% error at one frame back, 21% at six.
-- **One Euler step is enough.** On the frozen-encoder model with 5-frame blocks, the field is nearly straight within a step, so planning success is the same from 1 to 16 integration steps. At inference that model costs one velocity evaluation per step.
+- **Any time gap, including gaps never seen in training.** We trained on gaps of 1, 2, 3, 5 and 8 frames only, then evaluated on 4, 6, 7, 9, 11 and 15. The ODE predicts them as accurately as the gaps it was trained on (error 0.31 relative to "nothing changes" = 1.0). Composing discrete fixed steps matches this accuracy on integer gaps, while the continuous formulation handles arbitrary horizons natively and composes identically ($\int_0^8 = \int_0^3 + \int_3^8$, defect = 0.0). Trained only on irregular gaps, the ODE still plans at 88% ($n=100$), level with a matched discrete model (89%).
+- **Backward in time.** Integrating the vector field backward with $-dt$ reconstructs past latents: about **11% error at one frame back**, **21% at six frames back**. Discrete forward step maps have no natural inverse operator.
+- **One Euler step is enough.** On the frozen-encoder model with 5-frame blocks, the field is nearly straight within a step (arc/chord ratio = 1.005), so planning success is identical from 1 to 16 integration steps. At inference that model costs one velocity evaluation per step.
 - **Trains end-to-end from pixels.** Swapped into LeWM's official training recipe as a minimal change, the ODE predictor trains stably with no representation collapse and matches the transformer at every checkpoint from epoch 10 to 100 ($n=200$ paired).
 - **Graduated non-convexity makes gradient planning work.** Smoothing the learned vector field and annealing the smoothing to zero lifts gradient-based planning from 19% to 57% ($p \approx 5 \times 10^{-22}$), on both continuous and discrete predictors. An ensemble Kalman planner follows the same smoothed gradients from forward rollouts only and reaches 58.5% with no backpropagation.
 - **Faster CEM.** 2,000 rollouts per replan match LeWM's default 9,000 (85.0% vs 84.5%), about 3× faster at the same success rate.
@@ -24,6 +36,16 @@ LeWorldModel ([LeWM](https://arxiv.org/abs/2603.19312)) predicts the next latent
 
 ---
 
+## Why Continuous Time
+
+<p align="center">
+  <img src="assets/figures/dense_substep_flow.png" width="800" alt="Comparison of discrete black-box step jumps versus continuous physical flow continuum">
+</p>
+
+One vector field serves every horizon, predictions compose exactly, the step size is chosen at inference, and the field is a smooth object that can be integrated backward or smoothed for planning. At a fixed control rate this matches a discrete model's accuracy, which is expected: a flow held over one control step is itself a transition map. Where time is uneven, the continuous formulation takes any gap natively. A model that composes fixed steps generalizes to unseen integer gaps similarly, so the clearest advantages are non-integer steps, backward integration and the smoothing used in planning.
+
+---
+
 ## How It Works
 
 - **Frame-level actions.** Each raw 2-D action drives one frame of integration, so the model always knows which action applies when. LeWM's 10-D lumped block is replaced by five ordered steps.
@@ -31,12 +53,6 @@ LeWorldModel ([LeWM](https://arxiv.org/abs/2603.19312)) predicts the next latent
 - **Random time gaps in training.** Each batch samples a gap (1 to 25 frames) and supervises the prediction against the real latent at that frame, weighted $1/\sqrt{\Delta}$. One field has to explain every horizon, which is what lets it generalize to new gaps.
 - **Randomized solver steps.** The number of Euler sub-steps varies during training, so the field does not depend on a particular step size.
 - **Multi-step rollouts.** Supervising multi-step rollouts instead of single steps was the largest single improvement (20% to 74% at the same size, $n=50$).
-
----
-
-## Why Continuous Time
-
-One vector field serves every horizon, predictions compose exactly, the step size is chosen at inference, and the field is a smooth object that can be integrated backward or smoothed for planning. At a fixed control rate this matches a discrete model's accuracy, which is expected: a flow held over one control step is itself a transition map. Where time is uneven, the continuous formulation takes any gap natively. A model that composes fixed steps generalizes to unseen integer gaps similarly, so the clearest advantages are non-integer steps (next step below), backward integration and the smoothing used in planning.
 
 ---
 
